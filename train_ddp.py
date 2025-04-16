@@ -1,0 +1,254 @@
+from transformers import T5Tokenizer, TrainingArguments, Trainer
+from torchvision import transforms
+import json
+import os
+import time
+from torch.utils.data import DataLoader
+import torch
+import argparse
+from modules.multi_frame_dataset import MultiFrameDataset
+from modules.multi_frame_model import print_trainable_parameters, DriveVLMT5
+import matplotlib.pyplot as plt
+import pandas as pd
+from copy import deepcopy
+from tqdm import tqdm
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+import multiprocessing as mp
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
+def save_model(model, model_name, output_dir):
+    # Save the model into the designated folder
+    path = os.path.join(output_dir, model_name + '.pth')
+    torch.save(model.state_dict(), path)
+
+
+def val_model(dloader, val_model):
+    val_model.eval()
+    val_loss = 0
+
+    for idx, (inputs, imgs, labels) in tqdm(enumerate(dloader), total=len(dloader)):
+        outputs = val_model(inputs, imgs, labels)
+        val_loss += outputs.loss.item()
+
+    return val_loss / len(dloader)
+
+
+def save_stats(train_loss, val_loss, epochs, lr, output_dir):
+    stats_dict = {
+        'losses': losses,
+        'val_losses': val_losses,
+        'min_train_loss': train_loss,
+        'min_val_loss': val_loss,
+        'epochs': epochs,
+        'learning_rate': lr,
+        'LM': 'T5-Base',
+        'Image Embedding': 'Patch'
+    }
+
+    # Save stats into checkpoint
+    with open(os.path.join(output_dir, 'stats.json'), 'w') as f:
+        json.dump(stats_dict, f)
+
+
+def plot_loss(training_loss, val_loss, output_dir):
+    num_epochs = len(training_loss)
+
+    plt.plot(range(1, num_epochs + 1), training_loss, label='Training Loss')
+    plt.plot(range(1, num_epochs + 1), val_loss, label='Validation Loss')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Num epochs')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, 'loss.png'))
+
+
+def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model, train_dataloader, val_dataloader, config, output_dir):
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
+
+    for epoch in range(epochs, config.epochs):
+        if dist.get_rank() == 0:
+            print('-------------------- EPOCH ' + str(epoch) + ' ---------------------')
+        model.train()
+        epoch_loss = 0
+
+        for step, (inputs, imgs, labels) in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
+
+            # Forward pass through model
+            outputs = model(inputs, imgs, labels)
+
+            # Calculate loss
+            loss = outputs.loss
+            epoch_loss += loss.item()
+
+            if dist.get_rank() == 0 and step % config.checkpoint_frequency == 0:
+                print('Loss: ' + str(loss.item()))
+
+            # Back-propagate
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+
+        if config.distributed:
+            dist.barrier()
+        
+        if not config.distributed or dist.get_rank() == 0:
+
+            # Get train and val loss per batch
+            epoch_train_loss = epoch_loss / len(train_dataloader)
+            losses.append(epoch_train_loss)
+
+            epoch_val_loss = val_model(val_dataloader, model)
+            val_losses.append(epoch_val_loss)
+
+            if not val_loss or min(epoch_val_loss, val_loss) == epoch_val_loss:
+                val_loss = epoch_val_loss
+                best_model = deepcopy(model.state_dict())
+            if not train_loss or min(train_loss, epoch_train_loss) == epoch_train_loss:
+                train_loss = epoch_train_loss
+
+        # Adjust learning rate scheduler
+        scheduler.step()
+
+        if dist.get_rank() == 0:
+
+            print('Training Loss: ' + str(epoch_train_loss))
+            print('Validation Loss: ' + str(epoch_val_loss))
+            print('---------------------------------------------')
+
+        # Save model and stats for checkpoints
+        if dist.get_rank() == 0:
+            save_model(best_model, 'latest_model', output_dir)
+        epochs += 1
+        if dist.get_rank() == 0:
+            save_stats(train_loss, val_loss, epochs, scheduler.get_last_lr()[0], output_dir)
+
+    # Save the model and plot the loss
+    if dist.get_rank() == 0:
+        plot_loss(losses, val_losses, output_dir)
+    return train_loss, val_loss
+
+
+def train(config):
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    output_dir = os.path.join('multi_frame_results', timestr)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load processors and models
+    model = DriveVLMT5(config)
+    model = model.to(device)
+    if dist.get_rank() == 0:
+        print_trainable_parameters(model)
+
+    if config.lm == 'T5-Base':
+        processor = T5Tokenizer.from_pretrained('google-t5/t5-base')
+    else:
+        processor = T5Tokenizer.from_pretrained('google-t5/t5-large')
+
+    processor.add_tokens('<')
+
+    train_dset = MultiFrameDataset(
+        input_file=os.path.join('data', 'multi_frame', 'multi_frame_train.json'),
+        tokenizer=processor,
+        transform=transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
+        ])
+    )
+    val_dset = MultiFrameDataset(
+        input_file=os.path.join('data', 'multi_frame', 'multi_frame_val.json'),
+        tokenizer=processor,
+        transform=transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
+        ])
+    )
+
+    # Create Dataloaders
+    train_dataloader = DataLoader(train_dset, shuffle=True, batch_size=config.batch_size,
+                                  num_workers=config.num_workers, collate_fn=train_dset.collate_fn)
+    val_dataloader = DataLoader(val_dset, shuffle=True, batch_size=config.batch_size,
+                                num_workers=config.num_workers, collate_fn=train_dset.collate_fn)
+
+    # Initialize DistributedDataParallel
+    model = DDP(model, device_ids=[config.local_rank])
+
+    # Train the model
+    min_train_loss, min_val_loss = custom_train(None, None, None, 0, config.learning_rate, model, train_dataloader, val_dataloader, config, output_dir)
+    return min_train_loss, min_val_loss
+
+
+def params():
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--learning-rate", default=1e-4, type=float,
+                        help="Model learning rate starting point, default is 1e-4.")
+    parser.add_argument("--batch-size", default=4, type=int,
+                        help="Batch size per GPU/CPU for training and evaluation, defaults to 4.")
+    parser.add_argument("--weight-decay", default=0.05, type=float,
+                        help="L2 Regularization, default is 0.05")
+    parser.add_argument("--epochs", default=15, type=int,
+                        help="Number of epochs to train for, default is 15")
+    parser.add_argument("--hf-train", action='store_true',
+                        help="Whether to use HuggingFace default training or custom training loop")
+    parser.add_argument('--gpa-hidden-size', default=128, type=int, help='Hidden dimension for Gated Pooling Attention, '
+                                                                         'default is 128')
+    parser.add_argument('--freeze-lm', action='store_true', help='Freeze LM during training')
+    parser.add_argument('--lm', default='T5-Base', choices=['T5-Base', 'T5-Large'], type=str, help='Backbone LM to use, '
+                                                                                        'use \'T5-Base\' for T5-Medium')
+    parser.add_argument('--checkpoint-frequency', default=500, type=int, help='Frequency of showing example outputs')
+    parser.add_argument('--lora', action='store_true', help='Perform LoRA finetuning, recommend if '
+                                                            'using T5-Large backbone LM')
+    parser.add_argument('--lora-dim', default=64, type=int, help='LoRA dimension')
+    parser.add_argument('--lora-alpha', default=32, type=int, help='LoRA alpha')
+    parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
+    parser.add_argument('--num-workers', default=8, type=int, help='# of Workers used by Dataloader')
+    parser.add_argument('--load-checkpoint', action='store_true', help='Whether to load a checkpoint from '
+                                                                       'multi_frame_results folder')
+    parser.add_argument('--checkpoint-file', default='T5-Medium', type=str, help='The checkpoint to load from '
+                                                                                 'multi_frame_results directory')
+
+    args = parser.parse_args()
+    return args
+
+
+def init_distributed_mode(config):
+    """Initialize the distributed mode for DDP."""
+    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        config.rank = int(os.environ['RANK'])
+        config.world_size = int(os.environ['WORLD_SIZE'])
+        config.local_rank = int(os.environ['LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        config.rank = int(os.environ['SLURM_PROCID'])
+        config.local_rank = config.rank % torch.cuda.device_count()
+    else:
+        print('Not using distributed mode')
+        config.distributed = False
+        return
+
+    config.distributed = True
+
+    torch.cuda.set_device(config.local_rank)
+    print(f'| distributed init (rank {config.rank}): env://', flush=True)
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=config.world_size,
+        rank=config.rank
+    )
+    dist.barrier()
+
+def main():
+    config = params()
+    init_distributed_mode(config)
+    train(config)
+    
+
+
+if __name__ == "__main__":
+    mp.set_start_method('spawn', force=True)
+    main()

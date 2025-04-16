@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm
+import torch.multiprocessing as mp
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -87,14 +88,22 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
                 print('Loss: ' + str(loss.item()))
 
                 # Get the hidden states (output)
-                hidden_states = outputs.logits
+                # hidden_states = outputs.logits.
 
-                # Perform decoding (e.g., greedy decoding)
-                outputs = torch.argmax(hidden_states, dim=-1)
+                # # Perform decoding (e.g., greedy decoding)
+                # outputs = torch.argmax(hidden_states, dim=-1)
 
-                text_outputs = [processor.decode(output.to('cpu'), skip_special_tokens=True) for output in outputs]
-                text_questions = [processor.decode(q.to('cpu'), skip_special_tokens=True) for q in inputs]
-                text_labels = [processor.decode(a.to('cpu'), skip_special_tokens=True) for a in labels]
+                # text_outputs = [processor.decode(output.to('cpu'), skip_special_tokens=True) for output in outputs]
+                # text_questions = [processor.decode(q.to('cpu'), skip_special_tokens=True) for q in inputs]
+                # text_labels = [processor.decode(a.to('cpu'), skip_special_tokens=True) for a in labels]
+
+                with torch.no_grad():
+                    hidden_states = outputs.logits.detach().cpu()
+                    outputs_ids = torch.argmax(hidden_states, dim=-1)
+                    text_outputs = [processor.decode(output, skip_special_tokens=True) for output in outputs_ids]
+                    text_questions = [processor.decode(q.detach().cpu(), skip_special_tokens=True) for q in inputs]
+                    text_labels = [processor.decode(a.detach().cpu(), skip_special_tokens=True) for a in labels]
+
                 print()
                 print('Questions:')
                 print(text_questions)
@@ -215,7 +224,7 @@ def params():
     parser.add_argument('--lora-dim', default=64, type=int, help='LoRA dimension')
     parser.add_argument('--lora-alpha', default=32, type=int, help='LoRA alpha')
     parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
-    parser.add_argument('--num-workers', default=0, type=int, help='# of Workers used by Dataloader')
+    parser.add_argument('--num-workers', default=8, type=int, help='# of Workers used by Dataloader')
     parser.add_argument('--load-checkpoint', action='store_true', help='Whether to load a checkpoint from '
                                                                        'multi_frame_results folder')
     parser.add_argument('--checkpoint-file', default='T5-Medium', type=str, help='The checkpoint to load from '
@@ -227,6 +236,7 @@ def params():
 
 if __name__ == '__main__':
 
+    mp.set_start_method('spawn', force=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
 
     config = params()

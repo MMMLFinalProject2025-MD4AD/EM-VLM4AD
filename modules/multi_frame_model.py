@@ -3,6 +3,7 @@ from torchvision.models import vit_b_32
 import torch.nn as nn
 import torch
 from peft import LoraConfig, get_peft_model, LoftQConfig
+import torch.distributed as dist
 
 VIT_HIDDEN_STATE = 768
 VIT_SEQ_LENGTH = 49
@@ -51,11 +52,16 @@ class DriveVLMT5(nn.Module):
                 target_modules=['q', 'v']
             )
             self.model = get_peft_model(self.model, lora_config)
+        
+        if config.freeze_lm:
+            for param in self.model.parameters():
+                param.requires_grad = False
 
         hidden_size = self.model.config.d_model
 
-        print('Trainable Parameters for LM model:')
-        print_trainable_parameters(self.model)
+        if dist.get_rank() == 0:
+            print('Trainable Parameters for LM model:')
+            print_trainable_parameters(self.model)
 
         # Create instance for multi-view processor
         self.mvp = self.MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm, freeze=True)
@@ -153,6 +159,7 @@ class DriveVLMT5(nn.Module):
 
             # Concatenate embeddings -> (1 x S x 512)
             merged_embedding = torch.cat([text_embeddings, imgs_embedding], dim=1)
+            # merged_embedding = text_embeddings
 
             return merged_embedding
 

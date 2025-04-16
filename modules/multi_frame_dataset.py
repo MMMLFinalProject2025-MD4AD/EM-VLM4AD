@@ -30,6 +30,8 @@ class MultiFrameDataset(Dataset):
         # Concatenate images into a single tensor
         imgs = [self.transform(read_image(p).float()).to(device) for p in img_path]
         imgs = torch.stack(imgs, dim=0)
+        # imgs = [torch.zeros(3, 224, 224).to(device) for p in img_path]
+        # imgs = torch.stack(imgs, dim=0)
 
         return q_text, imgs, a_text, sorted(list(img_path))
 

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 import json
 import pandas as pd
+import torch.multiprocessing as mp
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -87,7 +88,7 @@ def params():
     parser.add_argument('--lora-alpha', default=32, type=int, help='LoRA alpha')
     parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
     parser.add_argument('--max-len', default=512, type=int, help='Max length for generating sequence')
-    parser.add_argument('--num-workers', default=0, type=int, help='# of Workers used by Dataloader')
+    parser.add_argument('--num-workers', default=16, type=int, help='# of Workers used by Dataloader')
     parser.add_argument('--model-name', default='T5-Medium', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
 
@@ -96,6 +97,8 @@ def params():
 
 
 if __name__ == '__main__':
+
+    mp.set_start_method('spawn', force=True)
 
     config = params()
 
@@ -124,7 +127,7 @@ if __name__ == '__main__':
             transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
         ])
     )
-    test_dloader = DataLoader(test_dset, shuffle=True, batch_size=config.batch_size, drop_last=True,
+    test_dloader = DataLoader(test_dset, shuffle=False, batch_size=config.batch_size, drop_last=True,
                               collate_fn=test_dset.test_collate_fn)
 
     # Load in image ids
