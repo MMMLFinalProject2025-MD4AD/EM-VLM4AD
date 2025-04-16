@@ -240,6 +240,7 @@ if __name__ == '__main__':
     timestr = time.strftime("%Y%m%d-%H%M%S")
 
     config = params()
+    config.distributed = False
 
     losses = []
     val_losses = []

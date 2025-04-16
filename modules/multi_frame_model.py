@@ -59,7 +59,7 @@ class DriveVLMT5(nn.Module):
 
         hidden_size = self.model.config.d_model
 
-        if dist.get_rank() == 0:
+        if not config.distributed or dist.get_rank() == 0:
             print('Trainable Parameters for LM model:')
             print_trainable_parameters(self.model)
 

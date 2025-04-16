@@ -15,6 +15,7 @@ from tqdm import tqdm
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 import multiprocessing as mp
+from torch.utils.data.distributed import DistributedSampler
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -167,12 +168,45 @@ def train(config):
             transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
         ])
     )
+    test_dset = MultiFrameDataset(
+        input_file=os.path.join('data', 'multi_frame',
+                                'multi_frame_test.json'),
+        tokenizer=processor,
+        transform=transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
+        ])
+    )
 
-    # Create Dataloaders
-    train_dataloader = DataLoader(train_dset, shuffle=True, batch_size=config.batch_size,
-                                  num_workers=config.num_workers, collate_fn=train_dset.collate_fn)
-    val_dataloader = DataLoader(val_dset, shuffle=True, batch_size=config.batch_size,
-                                num_workers=config.num_workers, collate_fn=train_dset.collate_fn)
+    train_sampler = DistributedSampler(train_dset) if config.distributed else None
+    val_sampler = DistributedSampler(val_dset, shuffle=False) if config.distributed else None
+    test_sampler = DistributedSampler(test_dset, shuffle=False) if config.distributed else None
+
+    train_dataloader = DataLoader(
+        train_dset,
+        batch_size=config.batch_size,
+        sampler=train_sampler,
+        shuffle=(train_sampler is None),
+        num_workers=config.num_workers,
+        collate_fn=train_dset.collate_fn
+    )
+    val_dataloader = DataLoader(
+        val_dset,
+        batch_size=config.batch_size,
+        sampler=val_sampler,
+        shuffle=False,
+        num_workers=config.num_workers,
+        collate_fn=train_dset.collate_fn
+    )
+    test_dataloader = DataLoader(
+        test_dset,
+        batch_size=config.batch_size,
+        sampler=test_sampler,
+        shuffle=False,
+        num_workers=config.num_workers,
+        collate_fn=test_dset.collate_fn
+    )
+
 
     # Initialize DistributedDataParallel
     model = DDP(model, device_ids=[config.local_rank])
