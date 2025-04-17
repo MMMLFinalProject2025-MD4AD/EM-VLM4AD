@@ -66,7 +66,7 @@ def plot_loss(training_loss, val_loss, output_dir):
     plt.savefig(os.path.join(output_dir, 'loss.png'))
 
 
-def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model, train_dataloader, val_dataloader, config, output_dir):
+def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model, train_dataloader, val_dataloader, config, output_dir, processor):
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
 
@@ -87,6 +87,22 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model,
 
             if dist.get_rank() == 0 and step % config.checkpoint_frequency == 0:
                 print('Loss: ' + str(loss.item()))
+                with torch.no_grad():
+                    hidden_states = outputs.logits.detach().cpu()
+                    outputs_ids = torch.argmax(hidden_states, dim=-1)
+                    text_outputs = [processor.decode(output, skip_special_tokens=True) for output in outputs_ids]
+                    text_questions = [processor.decode(q.detach().cpu(), skip_special_tokens=True) for q in inputs]
+                    text_labels = [processor.decode(a.detach().cpu(), skip_special_tokens=True) for a in labels]
+
+                print()
+                print('Questions:')
+                print(text_questions)
+                print()
+                print('Generated Answers:')
+                print(text_outputs)
+                print()
+                print('Ground Truth Answers:')
+                print(text_labels)
 
             # Back-propagate
             loss.backward()
@@ -212,7 +228,7 @@ def train(config):
     model = DDP(model, device_ids=[config.local_rank])
 
     # Train the model
-    min_train_loss, min_val_loss = custom_train(None, None, None, 0, config.learning_rate, model, train_dataloader, val_dataloader, config, output_dir)
+    min_train_loss, min_val_loss = custom_train(None, None, None, 0, config.learning_rate, model, train_dataloader, val_dataloader, config, output_dir, processor)
     return min_train_loss, min_val_loss
 
 
