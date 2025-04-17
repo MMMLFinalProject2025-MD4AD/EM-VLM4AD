@@ -42,7 +42,7 @@ def load_checkpoint(model, optimizer, checkpoint_path, scheduler=None, load_orig
 
 def save_model(model, model_name, output_dir, optimizer, epoch, config, scheduler=None):
     checkpoint = {
-        'model_state_dict': model.state_dict(),
+        'model_state_dict': model,
         'optimizer_state_dict': optimizer.state_dict(),
         'epoch': epoch,
         'learning_rate': optimizer.param_groups[0]['lr']
@@ -72,7 +72,7 @@ def val_model(dloader, val_model):
     return val_loss / len(dloader)
 
 
-def save_stats(train_loss, val_loss, epochs, lr, output_dir):
+def save_stats(train_loss, val_loss, epochs, lr, output_dir, losses, val_losses):
     stats_dict = {
         'losses': losses,
         'val_losses': val_losses,
@@ -110,9 +110,13 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
     #else:
         #model, optimizer, scheduler, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format)
 
+    if not config.distributed or dist.get_rank() == 0:
+        losses = []
+        val_losses = []
+
     for epoch in range(epochs, config.epochs):
         if dist.get_rank() == 0:
-            print('-------------------- EPOCH ' + str(epoch) + ' ---------------------')
+            print('-------------------- EPOCH ' + str(epoch) + '/ TOTAL ' + str(config.epochs) + ' ---------------------')
         model.train()
         epoch_loss = 0
 
@@ -166,7 +170,7 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
             save_model(best_model, 'latest_model_saved', output_dir, optimizer, epoch, config, scheduler=scheduler)
         epochs += 1
         if dist.get_rank() == 0:
-            save_stats(train_loss, val_loss, epochs, scheduler.get_last_lr()[0], output_dir)
+            save_stats(train_loss, val_loss, epochs, scheduler.get_last_lr()[0], output_dir, losses, val_losses)
 
     # Save the model and plot the loss
     if dist.get_rank() == 0:
@@ -261,7 +265,7 @@ def train(config):
     model = DDP(model, device_ids=[config.local_rank])
 
     # Train the model
-    min_train_loss, min_val_loss = custom_train(None, None, None, 0, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir)
+    min_train_loss, min_val_loss = custom_train(None, None, None, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir)
     return min_train_loss, min_val_loss
 
 

@@ -153,7 +153,7 @@ class DriveVLMT5(nn.Module):
             if self.mask_img:
                 imgs_embedding = torch.zeros((imgs.shape[0], 49, self.hidden_size), device=imgs.device)
             else:
-                imgs_embedding = self.get_img_embedding(imgs)            
+                imgs_embedding = self.get_img_embedding(imgs)
             #imgs_embedding = self.get_img_embedding(imgs)
 
             # Get the text embeddings (N x S x H)

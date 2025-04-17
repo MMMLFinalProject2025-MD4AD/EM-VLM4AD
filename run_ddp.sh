@@ -12,8 +12,9 @@ LORA=$3
 FREEZE_LM=$4
 LOAD_CHKPT=$5
 LOAD_ORIG_FMT=$6
-CHKPT_FILE=$7
-OUT_DIR=$8
+EPOCH=$7
+CHKPT_FILE=$8
+OUT_DIR=$9
 
 # Conditionally enable --lora
 if [ "$LORA" -eq 1 ]; then
@@ -59,6 +60,7 @@ torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     $FREEZE_ARG \
     $LOAD_ARG \
     --output-dir $OUT_DIR \
-    $LOAD_ORIG_ARG
+    $LOAD_ORIG_ARG \
+    --epochs $EPOCH
 
 
