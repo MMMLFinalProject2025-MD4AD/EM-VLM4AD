@@ -64,13 +64,15 @@ class DriveVLMT5(nn.Module):
             print_trainable_parameters(self.model)
 
         # Create instance for multi-view processor
-        self.mvp = self.MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm, freeze=True)
+        self.mvp = self.MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm, freeze=True, mask_img=config.mask_img)
 
     class MultiViewProcessor(nn.Module):
 
-        def __init__(self, gpa_hidden_size, hidden_size, lm, freeze=False):
+        def __init__(self, gpa_hidden_size, hidden_size, lm, freeze=False, mask_img=False):
 
             super().__init__()
+            self.mask_img = mask_img
+            self.hidden_size = hidden_size
 
             # Use ViT for image embeddings
             self.img_model = vit_b_32(weights='DEFAULT')
@@ -148,7 +150,11 @@ class DriveVLMT5(nn.Module):
         def forward(self, text_enc, imgs, text_model):
 
             # Get the image embeddings (N x 1 x 49 x H)
-            imgs_embedding = self.get_img_embedding(imgs)
+            if self.mask_img:
+                imgs_embedding = torch.zeros((imgs.shape[0], 49, self.hidden_size), device=imgs.device)
+            else:
+                imgs_embedding = self.get_img_embedding(imgs)            
+            #imgs_embedding = self.get_img_embedding(imgs)
 
             # Get the text embeddings (N x S x H)
             text_embeddings = text_model.get_input_embeddings()(text_enc)
@@ -158,6 +164,8 @@ class DriveVLMT5(nn.Module):
                                                                  device=device))
 
             # Concatenate embeddings -> (1 x S x 512)
+            #text_embeddings: (4, 43, 768)
+            #imgs_embeddings: (4, 49, 768)
             merged_embedding = torch.cat([text_embeddings, imgs_embedding], dim=1)
             # merged_embedding = text_embeddings
 

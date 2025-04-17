@@ -91,6 +91,7 @@ def params():
     parser.add_argument('--num-workers', default=16, type=int, help='# of Workers used by Dataloader')
     parser.add_argument('--model-name', default='T5-Medium', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
+    parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
 
     args = parser.parse_args()
     return args
