@@ -8,6 +8,7 @@ import torch
 import argparse
 from modules.multi_frame_dataset import MultiFrameDataset
 from modules.multi_frame_model import print_trainable_parameters, DriveVLMT5
+from modules.bevfusion_dataset import BevfusionDataset
 import matplotlib.pyplot as plt
 import pandas as pd
 from copy import deepcopy
@@ -229,6 +230,7 @@ def params():
                                                                        'multi_frame_results folder')
     parser.add_argument('--checkpoint-file', default='T5-Medium', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
+    parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
 
     args = parser.parse_args()
     return args
@@ -262,32 +264,36 @@ if __name__ == '__main__':
 
     processor.add_tokens('<')
 
-    train_dset = MultiFrameDataset(
+
+    if config.feat == 'image':
+        DatasetClass = MultiFrameDataset
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
+        ])
+    elif config.feat == 'bevfusion':
+        DatasetClass = BevfusionDataset
+        transform = None
+    else:
+        raise ValueError(f"Unknown feat type: {config.feat}")
+
+    train_dset = DatasetClass(
         input_file=os.path.join('data', 'multi_frame',
                                 'multi_frame_train.json'),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
+        transform=transform
     )
-    val_dset = MultiFrameDataset(
+    val_dset = DatasetClass(
         input_file=os.path.join('data', 'multi_frame',
                                 'multi_frame_val.json'),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
+        transform=transform
     )
-    test_dset = MultiFrameDataset(
+    test_dset = DatasetClass(
         input_file=os.path.join('data', 'multi_frame',
                                 'multi_frame_test.json'),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
+        transform=transform
     )
 
     # Create Dataloaders

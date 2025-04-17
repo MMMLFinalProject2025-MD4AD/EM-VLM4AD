@@ -64,7 +64,65 @@ class DriveVLMT5(nn.Module):
             print_trainable_parameters(self.model)
 
         # Create instance for multi-view processor
-        self.mvp = self.MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm, freeze=True)
+        if config.feat == 'image':
+            self.mvp = self.MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm, freeze=True)
+        elif config.feat == 'bevfusion':
+            self.mvp = self.BevfusionProcessor(hidden_size, config.lm)
+
+
+    class BevfusionProcessor(nn.Module):
+
+        def __init__(self, hidden_size, lm, freeze=False):
+
+            super().__init__()
+
+            self.lm = lm
+
+            # Modal embedding to distinguish between image and text
+            self.modal_embeddings = nn.Embedding(2, hidden_size)
+            self.modal_embeddings.weight.data.normal_(mean=0.0, std=0.02)
+
+            self.proj = nn.Linear(32400, VIT_HIDDEN_STATE)
+
+            if self.lm != 'T5-Base':
+                self.img_projection_layer = nn.Linear(in_features=VIT_HIDDEN_STATE, out_features=hidden_size)
+
+
+        def project(self, bevfusion_feat):
+
+            N = bevfusion_feat.shape[0]
+
+            proj_embedding = bevfusion_feat.view(N, 256, -1)  # (n,256,32400)
+            proj_embedding = self.proj(proj_embedding)      # (n,256,768)
+
+            # Project to VL dimension -> (1, 49, H) (H is 512 for t5-small, 768 for t5-base)
+            if self.lm != 'T5-Base':
+                proj_embedding = self.img_projection_layer(merged_embedding)
+
+            # Add modal type embedding to merged embedding
+            proj_embedding += self.modal_embeddings(
+                torch.ones((1, proj_embedding.shape[1]), dtype=torch.int, device=device))
+
+            return proj_embedding
+        
+        def forward(self, text_enc, bevfusion_feat, text_model):
+
+            # Get the image embeddings (N x 1 x 49 x H)
+            bevfusion_embedding = self.project(bevfusion_feat)
+
+            # Get the text embeddings (N x S x H)
+            text_embeddings = text_model.get_input_embeddings()(text_enc)
+
+            # Add modal embeddings to text
+            text_embeddings += self.modal_embeddings(torch.zeros((1, text_embeddings.shape[1]), dtype=torch.int,
+                                                                 device=device))
+
+            # Concatenate embeddings -> (1 x S x 512)
+            merged_embedding = torch.cat([text_embeddings, bevfusion_embedding], dim=1)
+            # merged_embedding = text_embeddings
+
+            return merged_embedding
+
 
     class MultiViewProcessor(nn.Module):
 

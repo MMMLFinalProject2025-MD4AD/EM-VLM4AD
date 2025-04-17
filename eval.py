@@ -7,6 +7,7 @@ from pycocoevalcap.eval import COCOEvalCap
 import os
 from modules.multi_frame_dataset import MultiFrameDataset
 from modules.multi_frame_model import DriveVLMT5
+from modules.bevfusion_dataset import BevfusionDataset
 from tqdm import tqdm as progress_bar
 from transformers import T5Tokenizer
 from torch.utils.data import DataLoader
@@ -91,6 +92,7 @@ def params():
     parser.add_argument('--num-workers', default=16, type=int, help='# of Workers used by Dataloader')
     parser.add_argument('--model-name', default='T5-Medium', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
+    parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
 
     args = parser.parse_args()
     return args
@@ -118,14 +120,24 @@ if __name__ == '__main__':
                                 'latest_model.pth')))
 
     # Load dataset and dataloader
-    test_dset = MultiFrameDataset(
-        input_file=os.path.join('data', 'multi_frame',
-                                'multi_frame_test.json'),
-        tokenizer=processor,
-        transform=transforms.Compose([
+
+    if config.feat == 'image':
+        DatasetClass = MultiFrameDataset
+        transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
         ])
+    elif config.feat == 'bevfusion':
+        DatasetClass = BevfusionDataset
+        transform = None
+    else:
+        raise ValueError(f"Unknown feat type: {config.feat}")
+
+    test_dset = DatasetClass(
+        input_file=os.path.join('data', 'multi_frame',
+                                'multi_frame_test.json'),
+        tokenizer=processor,
+        transform=transform
     )
     test_dloader = DataLoader(test_dset, shuffle=False, batch_size=config.batch_size, drop_last=True,
                               collate_fn=test_dset.test_collate_fn)
