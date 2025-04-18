@@ -13,6 +13,7 @@ torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     --master-addr=$MASTER_ADDR \
     --master-port=$MASTER_PORT \
     train_ddp.py \
-    --batch-size 4 \
-    --freeze-lm 
+    --batch-size 8 \
+    --num-workers 0 \
+    --checkpoint-frequency 10
 

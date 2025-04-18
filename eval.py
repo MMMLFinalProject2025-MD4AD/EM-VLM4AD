@@ -103,6 +103,7 @@ if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
 
     config = params()
+    config.distributed = False
 
     # Load processors and models
     model = DriveVLMT5(config)

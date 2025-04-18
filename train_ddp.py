@@ -89,11 +89,12 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model,
             if dist.get_rank() == 0 and step % config.checkpoint_frequency == 0:
                 print('Loss: ' + str(loss.item()))
                 with torch.no_grad():
+                    outputs.logits[:,:, 32101:] = -float("inf")
                     hidden_states = outputs.logits.detach().cpu()
                     outputs_ids = torch.argmax(hidden_states, dim=-1)
-                    text_outputs = [processor.decode(output, skip_special_tokens=True) for output in outputs_ids]
-                    text_questions = [processor.decode(q.detach().cpu(), skip_special_tokens=True) for q in inputs]
-                    text_labels = [processor.decode(a.detach().cpu(), skip_special_tokens=True) for a in labels]
+                    text_outputs = [processor.decode(output.tolist(), skip_special_tokens=True) for output in outputs_ids]
+                    text_questions = [processor.decode(q.detach().cpu().tolist(), skip_special_tokens=True) for q in inputs]
+                    text_labels = [processor.decode(a.detach().cpu().tolist(), skip_special_tokens=True) for a in labels]
 
                 print()
                 print('Questions:')
