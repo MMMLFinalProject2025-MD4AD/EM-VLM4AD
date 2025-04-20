@@ -2,7 +2,7 @@
 
 # Setup environment variables
 export MASTER_ADDR=localhost
-export MASTER_PORT=29503
+export MASTER_PORT=29502
 export WORLD_SIZE=2
 
 # Prevents CUDA from busy-waiting. Reduces resource waste and can help stabilize timeouts
@@ -90,3 +90,9 @@ torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     $RESTART_ARG \
     $FEAT_ARG \
     --checkpoint-frequency $CHK_FREQ
+
+#Example run: two GPUs, use bev, no masking img, no lora, freeze-lm, no using pretrained checkpoint, not original checkpoint from author, epoch starts from 0, total 2 epochs, check every 1000 steps, the pretrained checkpoint, output folder
+#CUDA_VISIBLE_DEVICES=0,2 bash ./run_ddp.sh 2 1 0 0 1 0 0 1 2 1000 /data/patrick/mmml_saving/image_Q_pretrained/latest_model_saved.pth /data/patrick/mmml_saving/bev_Q_pretrained/
+
+#Example run: two GPUs, use img, no masking img, use lora, no freeze-lm, use pretrained checkpoint, not original checkpoint from author, epoch starts from 0, total 2 epochs, check every 1000 steps, the pretrained checkpoint, output folder
+#CUDA_VISIBLE_DEVICES=1,2 bash ./run_ddp.sh 2 0 0 1 0 1 0 1 2 1000 /data/patrick/mmml_saving/image_Q_pretrained/latest_model_saved.pth /data/patrick/mmml_saving/image_Q_finetuned/
