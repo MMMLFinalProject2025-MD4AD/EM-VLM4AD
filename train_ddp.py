@@ -19,24 +19,36 @@ from torch.utils.data.distributed import DistributedSampler
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def load_checkpoint(model, optimizer, checkpoint_path, scheduler=None, load_orig_format=True):
+def load_checkpoint(model, optimizer, checkpoint_path, scheduler=None, load_orig_format=True, restart=False):
 
     if load_orig_format:
         model.load_state_dict(torch.load(checkpoint_path))
         return model, None, None, 0
     else:
         checkpoint = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        raw_model_state = checkpoint['model_state_dict']
+        if all(k.startswith("module.") for k in raw_model_state):
+            model_state = {k.replace("module.", ""): v for k, v in raw_model_state.items()}
+        else:
+            model_state = raw_model_state
+        model.load_state_dict(model_state)
+
+        # Restore optimizer
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
+        # Restore scheduler if present
         if scheduler and 'scheduler_state_dict' in checkpoint:
             scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        start_epoch = checkpoint['epoch'] + 1
-        lr = checkpoint.get('learning_rate', None)
-        if lr:
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
+        # Continue from last epoch
+        if restart:
+            start_epoch = 0
+        else:
+            start_epoch = checkpoint['epoch'] + 1
+            lr = checkpoint.get('learning_rate', None)
+            if lr:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
 
         return model, optimizer, scheduler, start_epoch    
 
@@ -120,6 +132,7 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
         model.train()
         epoch_loss = 0
 
+        #for step, (inputs, imgs, labels) in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
         for step, (inputs, imgs, labels) in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
 
             # Forward pass through model
@@ -167,6 +180,7 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
         # Save model and stats for checkpoints
         if dist.get_rank() == 0:
             #save_model(best_model, 'latest_model', output_dir)
+            print("Saving model... Keys:", list(best_model.keys())[:5])
             save_model(best_model, 'latest_model_saved', output_dir, optimizer, epoch, config, scheduler=scheduler)
         epochs += 1
         if dist.get_rank() == 0:
@@ -182,6 +196,7 @@ def train(config):
     ##timestr = time.strftime("%Y%m%d-%H%M%S")
     #output_dir = os.path.join('multi_frame_results', timestr)
     output_dir = config.output_dir
+    print(f"output_dir = {output_dir}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -259,7 +274,10 @@ def train(config):
     if config.load_checkpoint and config.load_orig_format:
         model, _, _, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format)
     else:
-        model, optimizer, scheduler, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format)
+        model, optimizer, scheduler, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format, config.restart)
+
+    if dist.is_initialized():
+        dist.barrier()        
 
     # Initialize DistributedDataParallel
     model = DDP(model, device_ids=[config.local_rank])
@@ -299,6 +317,7 @@ def params():
     parser.add_argument('--checkpoint-file', default='./multi_frame_results/T5-Base/latest_model.pth', type=str, help='The checkpoint to load from.'
                                                                                  'multi_frame_results directory')
     parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
+    parser.add_argument('--restart', action='store_true', help='Restart epoch from 0.')
     parser.add_argument('--load-orig-format', action='store_true', help='Load the checkpoint format from the original checkpoint of the author.')
     parser.add_argument('--output-dir', default='./multi_frame_results/outputs', type=str, help='The output directory for saveing checkpoint and stats')
 

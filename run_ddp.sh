@@ -12,9 +12,10 @@ LORA=$3
 FREEZE_LM=$4
 LOAD_CHKPT=$5
 LOAD_ORIG_FMT=$6
-EPOCH=$7
-CHKPT_FILE=$8
-OUT_DIR=$9
+RESTART=$7
+EPOCH=$8
+CHKPT_FILE=$9
+OUT_DIR=${10}
 
 # Conditionally enable --lora
 if [ "$LORA" -eq 1 ]; then
@@ -49,6 +50,12 @@ else
     LOAD_ORIG_ARG=""
 fi
 
+if [ "$RESTART" -eq 1 ]; then
+    RESTART_ARG="--restart"
+else
+    RESTART_ARG=""
+fi
+
 # Launch training with torchrun (DDP)
 torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     --master-addr=$MASTER_ADDR \
@@ -61,6 +68,7 @@ torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     $LOAD_ARG \
     --output-dir $OUT_DIR \
     $LOAD_ORIG_ARG \
-    --epochs $EPOCH
+    --epochs $EPOCH \
+    $RESTART_ARG
 
 
