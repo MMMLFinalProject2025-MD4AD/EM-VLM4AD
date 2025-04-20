@@ -2,20 +2,31 @@
 
 # Setup environment variables
 export MASTER_ADDR=localhost
-export MASTER_PORT=29502
+export MASTER_PORT=29503
 export WORLD_SIZE=2
+
+# Prevents CUDA from busy-waiting. Reduces resource waste and can help stabilize timeouts
+export NCCL_BLOCKING_WAIT=1
+# Allows distributed training to gracefully detect and handle errors (like one rank failing), instead of silently hanging.
+export NCCL_ASYNC_ERROR_HANDLING=1
+# Turns on debug logging for NCCL operations.
+export NCCL_DEBUG=INFO
+# Increases the timeout (in seconds) for NCCL collectives (default is 180s = 3 minutes).
+export NCCL_TIMEOUT=1800
 
 # Number of GPUs to use (adjust as needed)
 NUM_GPUS=$1
-MASK_IMG=$2
-LORA=$3
-FREEZE_LM=$4
-LOAD_CHKPT=$5
-LOAD_ORIG_FMT=$6
-RESTART=$7
-EPOCH=$8
-CHKPT_FILE=$9
-OUT_DIR=${10}
+FEAT=$2
+MASK_IMG=$3
+LORA=$4
+FREEZE_LM=$5
+LOAD_CHKPT=$6
+LOAD_ORIG_FMT=$7
+RESTART=$8
+EPOCH=$9
+CHK_FREQ=${10}
+CHKPT_FILE=${11}
+OUT_DIR=${12}
 
 # Conditionally enable --lora
 if [ "$LORA" -eq 1 ]; then
@@ -56,12 +67,19 @@ else
     RESTART_ARG=""
 fi
 
+if [ "$FEAT" -eq 1 ]; then
+    FEAT_ARG="--feat bevfusion"
+else
+    FEAT_ARG="--feat image"
+fi
+
 # Launch training with torchrun (DDP)
 torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     --master-addr=$MASTER_ADDR \
     --master-port=$MASTER_PORT \
     train_ddp.py \
-    --batch-size 4 \
+    --batch-size 8 \
+    --num-workers 0 \
     $MASK_ARG \
     $LORA_ARG \
     $FREEZE_ARG \
@@ -69,6 +87,6 @@ torchrun --nproc_per_node=$NUM_GPUS --nnodes=1 --node_rank=0 \
     --output-dir $OUT_DIR \
     $LOAD_ORIG_ARG \
     --epochs $EPOCH \
-    $RESTART_ARG
-
-
+    $RESTART_ARG \
+    $FEAT_ARG \
+    --checkpoint-frequency $CHK_FREQ

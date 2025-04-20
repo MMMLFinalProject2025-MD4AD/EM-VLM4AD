@@ -8,6 +8,7 @@ import torch
 import argparse
 from modules.multi_frame_dataset import MultiFrameDataset
 from modules.multi_frame_model import print_trainable_parameters, DriveVLMT5
+from modules.bevfusion_dataset import BevfusionDataset
 import matplotlib.pyplot as plt
 import pandas as pd
 from copy import deepcopy
@@ -113,7 +114,7 @@ def plot_loss(training_loss, val_loss, output_dir):
     plt.savefig(os.path.join(output_dir, 'loss.png'))
 
 
-def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir):
+def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir, processor):
     #optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
     #scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
 
@@ -144,6 +145,23 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
 
             if dist.get_rank() == 0 and step % config.checkpoint_frequency == 0:
                 print('Loss: ' + str(loss.item()))
+                with torch.no_grad():
+                    outputs.logits[:,:, 32101:] = -float("inf")
+                    hidden_states = outputs.logits.detach().cpu()
+                    outputs_ids = torch.argmax(hidden_states, dim=-1)
+                    text_outputs = [processor.decode(output.tolist(), skip_special_tokens=True) for output in outputs_ids]
+                    text_questions = [processor.decode(q.detach().cpu().tolist(), skip_special_tokens=True) for q in inputs]
+                    text_labels = [processor.decode(a.detach().cpu().tolist(), skip_special_tokens=True) for a in labels]
+
+                print()
+                print('Questions:')
+                print(text_questions)
+                print()
+                print('Generated Answers:')
+                print(text_outputs)
+                print()
+                print('Ground Truth Answers:')
+                print(text_labels)
 
             # Back-propagate
             loss.backward()
@@ -212,31 +230,37 @@ def train(config):
         processor = T5Tokenizer.from_pretrained('google-t5/t5-large')
 
     processor.add_tokens('<')
+    processor.model_max_length = 512  # for msg: 'Token indices sequence length is longer than the specified maximum sequence length for this model (583 > 512). Running this sequence through the model will result in indexing errors'
 
-    train_dset = MultiFrameDataset(
-        input_file=os.path.join('data', 'multi_frame', 'multi_frame_train.json'),
-        tokenizer=processor,
-        transform=transforms.Compose([
+    if config.feat == 'image':
+        DatasetClass = MultiFrameDataset
+        transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
         ])
-    )
-    val_dset = MultiFrameDataset(
-        input_file=os.path.join('data', 'multi_frame', 'multi_frame_val.json'),
+    elif config.feat == 'bevfusion':
+        DatasetClass = BevfusionDataset
+        transform = None
+    else:
+        raise ValueError(f"Unknown feat type: {config.feat}")
+
+    train_dset = DatasetClass(
+        input_file=os.path.join('data', 'multi_frame',
+                                'multi_frame_train.json'),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
+        transform=transform
     )
-    test_dset = MultiFrameDataset(
+    val_dset = DatasetClass(
+        input_file=os.path.join('data', 'multi_frame',
+                                'multi_frame_val.json'),
+        tokenizer=processor,
+        transform=transform
+    )
+    test_dset = DatasetClass(
         input_file=os.path.join('data', 'multi_frame',
                                 'multi_frame_test.json'),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
+        transform=transform
     )
 
     train_sampler = DistributedSampler(train_dset) if config.distributed else None
@@ -270,10 +294,11 @@ def train(config):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
+    epochs = 0
 
     if config.load_checkpoint and config.load_orig_format:
         model, _, _, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format)
-    else:
+    elif config.load_checkpoint:
         model, optimizer, scheduler, epochs = load_checkpoint(model, optimizer, config.checkpoint_file, scheduler, config.load_orig_format, config.restart)
 
     if dist.is_initialized():
@@ -283,7 +308,7 @@ def train(config):
     model = DDP(model, device_ids=[config.local_rank])
 
     # Train the model
-    min_train_loss, min_val_loss = custom_train(None, None, None, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir)
+    min_train_loss, min_val_loss = custom_train(None, None, None, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir, processor)
     return min_train_loss, min_val_loss
 
 
@@ -314,8 +339,8 @@ def params():
     parser.add_argument('--num-workers', default=8, type=int, help='# of Workers used by Dataloader')
     parser.add_argument('--load-checkpoint', action='store_true', help='Whether to load a checkpoint from '
                                                                        'multi_frame_results folder')
-    parser.add_argument('--checkpoint-file', default='./multi_frame_results/T5-Base/latest_model.pth', type=str, help='The checkpoint to load from.'
-                                                                                 'multi_frame_results directory')
+    parser.add_argument('--checkpoint-file', default='./multi_frame_results/T5-Base/latest_model.pth', type=str, help='The checkpoint to load from multi_frame_results directory')
+    parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
     parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
     parser.add_argument('--restart', action='store_true', help='Restart epoch from 0.')
     parser.add_argument('--load-orig-format', action='store_true', help='Load the checkpoint format from the original checkpoint of the author.')

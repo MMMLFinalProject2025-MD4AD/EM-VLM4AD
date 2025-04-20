@@ -28,7 +28,7 @@ class MultiFrameDataset(Dataset):
         q_text = f"Question: {q_text} Answer:"
 
         # Concatenate images into a single tensor
-        imgs = [self.transform(read_image(p).float()).to(device) for p in img_path]
+        imgs = [self.transform(read_image(p).float()) for p in img_path]
         imgs = torch.stack(imgs, dim=0)
         # imgs = [torch.zeros(3, 224, 224).to(device) for p in img_path]
         # imgs = torch.stack(imgs, dim=0)
@@ -39,8 +39,8 @@ class MultiFrameDataset(Dataset):
         q_texts, imgs, a_texts, _ = zip(*batch)
         imgs = torch.stack(list(imgs), dim=0)
 
-        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids.to(device)
-        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids.to(device)
+        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids
+        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids
 
         return encodings, imgs, labels
 
@@ -48,7 +48,7 @@ class MultiFrameDataset(Dataset):
         q_texts, imgs, a_texts, img_path = zip(*batch)
         imgs = torch.stack(list(imgs), dim=0)
 
-        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids.to(device)
-        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids.to(device)
+        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids
+        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids
 
         return list(q_texts), encodings, imgs, labels, img_path

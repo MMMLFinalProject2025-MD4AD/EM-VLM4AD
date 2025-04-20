@@ -7,6 +7,7 @@ from pycocoevalcap.eval import COCOEvalCap
 import os
 from modules.multi_frame_dataset import MultiFrameDataset
 from modules.multi_frame_model import DriveVLMT5
+from modules.bevfusion_dataset import BevfusionDataset
 from tqdm import tqdm as progress_bar
 from transformers import T5Tokenizer
 from torch.utils.data import DataLoader
@@ -17,7 +18,21 @@ import torch.multiprocessing as mp
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def val_model(dloader):
+def load_checkpoint(model, checkpoint_path, load_orig_format=True):
+    if load_orig_format:
+        model.load_state_dict(torch.load(checkpoint_path))
+        return model
+    else:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        raw_model_state = checkpoint['model_state_dict']
+        if all(k.startswith("module.") for k in raw_model_state):
+            model_state = {k.replace("module.", ""): v for k, v in raw_model_state.items()}
+        else:
+            model_state = raw_model_state
+        model.load_state_dict(model_state)
+        return model
+
+def val_model(dloader, config):
     model.eval()
     ids_answered = set()
     test_data = []
@@ -25,6 +40,8 @@ def val_model(dloader):
     with torch.no_grad():
         for idx, (q_texts, encodings, imgs, labels, img_paths) in progress_bar(enumerate(dloader), total=len(dloader)):
 
+            encodings = encodings.to(device)
+            imgs = imgs.to(device)
             outputs = model.generate(encodings, imgs)
 
             # Get the text output
@@ -48,7 +65,9 @@ def val_model(dloader):
                 test_data.append({'image_id': image_id_dict[img_key + ' ' + q_text][0], 'caption': text_output})
 
     # Save test output to file
-    with open(os.path.join('multi_frame_results', config.model_name, 'predictions.json'), 'w') as f:
+    output_path = os.path.join(config.output_dir, config.model_name)
+    os.makedirs(output_path, exist_ok=True)
+    with open(os.path.join(output_path, 'predictions.json'), 'w') as f:
         json.dump(test_data, f)
 
 
@@ -66,8 +85,11 @@ def save_experiment():
         trial_dict[metric] = [score]
 
     trial_dict = pd.DataFrame(trial_dict)
+
+    output_path = os.path.join(config.output_dir, config.model_name)
+    os.makedirs(output_path, exist_ok=True)
     trial_dict.to_csv(
-        os.path.join('multi_frame_results', config.model_name, 'metrics.csv'),
+        os.path.join(output_path, 'metrics.csv'),
         index=False, header=True)
 
 def params():
@@ -92,6 +114,12 @@ def params():
     parser.add_argument('--model-name', default='T5-Medium', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
     parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
+    parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
+    parser.add_argument('--checkpoint-file', default='./multi_frame_results/T5-Base/latest_model.pth', type=str, help='The checkpoint to load from multi_frame_results directory')
+    parser.add_argument('--load-orig-format', action='store_true', help='Load the checkpoint format from the original checkpoint of the author.')
+    parser.add_argument('--load-checkpoint', action='store_true', help='Whether to load a checkpoint from '
+                                                                       'multi_frame_results folder')
+    parser.add_argument('--output-dir', default='./multi_frame_results/results', type=str, help='The output directory for saveing checkpoint and stats')
 
     args = parser.parse_args()
     return args
@@ -102,6 +130,8 @@ if __name__ == '__main__':
     mp.set_start_method('spawn', force=True)
 
     config = params()
+    config.distributed = False
+    os.makedirs(config.output_dir, exist_ok=True)
 
     # Load processors and models
     model = DriveVLMT5(config)
@@ -114,19 +144,34 @@ if __name__ == '__main__':
 
     processor.add_tokens('<')
 
-    model.load_state_dict(
-        torch.load(os.path.join('multi_frame_results', config.model_name,
-                                'latest_model.pth')))
+    if config.load_checkpoint and config.load_orig_format:
+        model = load_checkpoint(model, config.checkpoint_file, config.load_orig_format)
+    else:
+        model = load_checkpoint(model, config.checkpoint_file, config.load_orig_format)
+
+    #model.load_state_dict(
+        #torch.load(os.path.join('multi_frame_results', config.model_name,
+                                #'latest_model.pth')))
 
     # Load dataset and dataloader
-    test_dset = MultiFrameDataset(
-        input_file=os.path.join('data', 'multi_frame',
-                                'multi_frame_test.json'),
-        tokenizer=processor,
-        transform=transforms.Compose([
+
+    if config.feat == 'image':
+        DatasetClass = MultiFrameDataset
+        transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
         ])
+    elif config.feat == 'bevfusion':
+        DatasetClass = BevfusionDataset
+        transform = None
+    else:
+        raise ValueError(f"Unknown feat type: {config.feat}")
+
+    test_dset = DatasetClass(
+        input_file=os.path.join('data', 'multi_frame',
+                                'multi_frame_test.json'),
+        tokenizer=processor,
+        transform=transform
     )
     test_dloader = DataLoader(test_dset, shuffle=False, batch_size=config.batch_size, drop_last=True,
                               collate_fn=test_dset.test_collate_fn)
@@ -136,10 +181,10 @@ if __name__ == '__main__':
         image_id_dict = json.load(f)
 
     # Get the loss and predictions from the model
-    val_model(test_dloader)
+    val_model(test_dloader, config)
 
     annotation_file = os.path.join('data', 'multi_frame', 'multi_frame_test_coco.json')
-    results_file = os.path.join('multi_frame_results', config.model_name,
+    results_file = os.path.join(f'{config.output_dir}', config.model_name,
                                 'predictions.json')
 
     # create coco object and coco_result object
