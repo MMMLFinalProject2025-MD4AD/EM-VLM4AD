@@ -97,7 +97,7 @@ class DriveVLMT5(nn.Module):
 
             # Project to VL dimension -> (1, 49, H) (H is 512 for t5-small, 768 for t5-base)
             if self.lm != 'T5-Base':
-                proj_embedding = self.img_projection_layer(merged_embedding)
+                proj_embedding = self.img_projection_layer(proj_embedding)
 
             # Add modal type embedding to merged embedding
             proj_embedding += self.modal_embeddings(

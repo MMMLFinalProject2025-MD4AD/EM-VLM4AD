@@ -43,7 +43,7 @@ class BevfusionDataset(Dataset):
                 raise FileNotFoundError
 
                 
-            bevfusion_feat = torch.load(bevfusion_path).to(device)
+            bevfusion_feat = torch.load(bevfusion_path)
 
             q_text, a_text = qa['Q'], qa['A']
             q_text = f"Question: {q_text} Answer:"
@@ -61,8 +61,8 @@ class BevfusionDataset(Dataset):
         q_texts, bevfusion_feat, a_texts, _ = zip(*batch)
         bevfusion_feat = torch.stack(list(bevfusion_feat), dim=0)
 
-        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids.to(device)
-        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids.to(device)
+        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids
+        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids
 
         return encodings, bevfusion_feat, labels
 
@@ -70,7 +70,7 @@ class BevfusionDataset(Dataset):
         q_texts, bevfusion_feat, a_texts, img_path = zip(*batch)
         bevfusion_feat = torch.stack(list(bevfusion_feat), dim=0)
 
-        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids.to(device)
-        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids.to(device)
+        encodings = self.tokenizer(q_texts, padding=True, return_tensors="pt").input_ids
+        labels = self.tokenizer(a_texts, padding=True, return_tensors='pt').input_ids
 
         return list(q_texts), encodings, bevfusion_feat, labels, img_path

@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm
-import torch.multiprocessing as mp
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -76,6 +75,9 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
         for step, (inputs, imgs, labels) in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
 
             # print(inputs.shape, imgs.shape, labels.shape)
+            inputs = inputs.to(device)
+            imgs = imgs.to(device)
+            labels = labels.to(device)
 
             # Forward pass through model
             outputs = model(inputs, imgs, labels)
@@ -238,7 +240,6 @@ def params():
 
 if __name__ == '__main__':
 
-    mp.set_start_method('spawn', force=True)
     timestr = time.strftime("%Y%m%d-%H%M%S")
 
     config = params()
