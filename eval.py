@@ -26,6 +26,10 @@ def val_model(dloader):
     with torch.no_grad():
         for idx, (q_texts, encodings, imgs, labels, img_paths) in progress_bar(enumerate(dloader), total=len(dloader)):
 
+            encodings = encodings.to(device)
+            imgs = imgs.to(device)
+            labels = labels.to(device)
+
             outputs = model.generate(encodings, imgs)
 
             # Get the text output

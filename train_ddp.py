@@ -79,6 +79,9 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate, model,
 
         for step, (inputs, imgs, labels) in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
 
+            inputs = inputs.to(device)
+            imgs = inputs.to(device)
+            labels = labels.to(device)
             # Forward pass through model
             outputs = model(inputs, imgs, labels)
 
