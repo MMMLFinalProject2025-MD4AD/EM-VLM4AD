@@ -28,6 +28,10 @@ def val_model(dloader, val_model):
     val_loss = 0
 
     for idx, (inputs, imgs, labels) in tqdm(enumerate(dloader), total=len(dloader)):
+        inputs = inputs.to(device)
+        imgs = imgs.to(device)
+        labels = labels.to(device)
+        
         outputs = val_model(inputs, imgs, labels)
         val_loss += outputs.loss.item()
 
