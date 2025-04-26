@@ -25,7 +25,7 @@ class BevfusionDataset(Dataset):
 
         self.tokenizer = tokenizer
         self.transform = transform
-        self.bevfusion_dir = '/data/Datasets/NuScenes-QA/bevfusion_feats/DriveLM/train'
+        self.bevfusion_dir = '/data/Datasets/NuScenes-QA/bevfusion_feats/DriveLM/all'
 
     def __len__(self):
         return len(self.data)

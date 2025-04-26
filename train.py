@@ -16,11 +16,60 @@ from tqdm import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+def load_checkpoint(model, checkpoint_path, optimizer=None, scheduler=None, load_orig_format=True, restart=False):
 
+    if load_orig_format:
+        model.load_state_dict(torch.load(checkpoint_path))
+        return model, None, None, 0
+    else:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        raw_model_state = checkpoint['model_state_dict']
+        if all(k.startswith("module.") for k in raw_model_state):
+            model_state = {k.replace("module.", ""): v for k, v in raw_model_state.items()}
+        else:
+            model_state = raw_model_state
+        model.load_state_dict(model_state)
+
+        # Restore optimizer
+        if optimizer and 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        # Restore scheduler if present
+        if scheduler and 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+
+        # Continue from last epoch
+        if restart:
+            start_epoch = 0
+        else:
+            start_epoch = checkpoint['epoch'] + 1
+            lr = checkpoint.get('learning_rate', None)
+            if lr:
+                if optimizer:
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = lr
+
+        return model, optimizer, scheduler, start_epoch    
+
+def save_model(model, model_name, output_dir, optimizer, epoch, config, scheduler=None):
+    checkpoint = {
+        'model_state_dict': model,
+        'optimizer_state_dict': optimizer.state_dict(),
+        'epoch': epoch,
+        'learning_rate': optimizer.param_groups[0]['lr']
+    }
+
+    if scheduler is not None:
+        checkpoint['scheduler_state_dict'] = scheduler.state_dict()    
+    path = os.path.join(output_dir, model_name + '.pth')
+    torch.save(checkpoint, path)
+
+'''
 def save_model(model, model_name):
     # Save the model into the designated folder
     path = os.path.join('multi_frame_results', timestr, model_name + '.pth')
     torch.save(model, path)
+'''
 
 
 def val_model(dloader, val_model):
@@ -28,13 +77,17 @@ def val_model(dloader, val_model):
     val_loss = 0
 
     for idx, (inputs, imgs, labels) in tqdm(enumerate(dloader), total=len(dloader)):
+        inputs = inputs.to(device)
+        imgs = imgs.to(device)
+        labels = labels.to(device)
+
         outputs = val_model(inputs, imgs, labels)
         val_loss += outputs.loss.item()
 
     return val_loss / len(val_dataloader)
 
 
-def save_stats(train_loss, val_loss, epochs, lr):
+def save_stats(train_loss, val_loss, epochs, lr, output_dir, timestr, losses, val_losses):
     stats_dict = {
         'losses': losses,
         'val losses': val_losses,
@@ -47,11 +100,13 @@ def save_stats(train_loss, val_loss, epochs, lr):
     }
 
     # Save stats into checkpoint
-    with open(os.path.join('multi_frame_results', timestr, 'stats.json'), 'w') as f:
+    output_folder = os.path.join(f'{output_dir}', timestr)
+    os.makedirs(output_folder, exist_ok=True)
+    with open(os.path.join(f'{output_folder}', 'stats.json'), 'w') as f:
         json.dump(stats_dict, f)
 
 
-def plot_loss(training_loss, val_loss):
+def plot_loss(training_loss, val_loss, output_dir, timstr):
     num_epochs = len(training_loss)
 
     plt.plot(range(1, num_epochs + 1), training_loss, label='Training Loss')
@@ -60,15 +115,17 @@ def plot_loss(training_loss, val_loss):
     plt.xlabel('Num epochs')
     plt.ylabel('Loss')
     plt.legend()
-    plt.savefig(os.path.join('multi_frame_results', timestr, 'loss.png'))
+    output_folder = os.path.join(f'{output_dir}', timestr)
+    os.makedirs(output_folder, exist_ok=True)
+    plt.savefig(os.path.join(f'{output_folder}', 'loss.png'))
 
 
-def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
+def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir, processor):
 
+    save_chkpt_filename = 'latest_model_saved'
+    path = os.path.join(output_dir, f'{save_chkpt_filename}' + '.pth')
     for epoch in range(epochs, config.epochs):
-        print('-------------------- EPOCH ' + str(epoch) + ' ---------------------')
+        print('-------------------- EPOCH ' + str(epoch) + '/ TOTAL ' + str(config.epochs) + ' ---------------------')
         model.train()
         epoch_loss = 0
 
@@ -143,13 +200,15 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
         print('---------------------------------------------')
 
         # Save model and stats for checkpoints
-        save_model(best_model, 'latest_model')
+        print("Saving model... Keys:", list(best_model.keys())[:5])
+
+        save_model(best_model, save_chkpt_filename, output_dir, optimizer, epoch, config, scheduler=scheduler)
         epochs += 1
-        save_stats(train_loss, val_loss, epochs, scheduler.get_last_lr()[0])
+        save_stats(train_loss, val_loss, epochs, scheduler.get_last_lr()[0], output_dir, save_chkpt_filename, losses, val_losses)
 
     # Save the model and plot the loss
-    plot_loss(losses, val_losses)
-    return train_loss, val_loss
+    plot_loss(losses, val_losses, output_dir, 'latest_model_saved')
+    return train_loss, val_loss, path
 
 
 def train():
@@ -176,7 +235,7 @@ def train():
     model.push_to_hub("agopalkr/EfficientDriveLM")
 
 
-def save_experiment(statistics):
+def save_experiment(statistics, config):
     """
     Saves the experiment multi_frame_results to a csv
     :param config: The hyperparameters used
@@ -200,7 +259,7 @@ def save_experiment(statistics):
     }
 
     trial_dict = pd.DataFrame(trial_dict)
-    trial_dict.to_csv(os.path.join('multi_frame_results', timestr, 'multi_frame_results.csv'), index=False, header=True)
+    trial_dict.to_csv(os.path.join(f'{config.output_dir}', 'results.csv'), index=False, header=True)
 
 
 def params():
@@ -228,11 +287,16 @@ def params():
     parser.add_argument('--lora-alpha', default=32, type=int, help='LoRA alpha')
     parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
     parser.add_argument('--num-workers', default=8, type=int, help='# of Workers used by Dataloader')
+    parser.add_argument('--load-stat', action='store_true', help='Load the stats.json to continue the loss/epoch.')
+    parser.add_argument('--stat-file', default='./data/multi_frame_results/T5-Base/stats.json', type=str, help='The stats.json file from pretrained output.')
     parser.add_argument('--load-checkpoint', action='store_true', help='Whether to load a checkpoint from '
                                                                        'multi_frame_results folder')
-    parser.add_argument('--checkpoint-file', default='T5-Medium', type=str, help='The checkpoint to load from '
-                                                                                 'multi_frame_results directory')
+    parser.add_argument('--checkpoint-file', default='./multi_frame_results/T5-Base/latest_model.pth', type=str, help='The checkpoint to load from multi_frame_results directory')
     parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
+    parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
+    parser.add_argument('--restart', action='store_true', help='Restart epoch from 0.')
+    parser.add_argument('--load-orig-format', action='store_true', help='Load the checkpoint format from the original checkpoint of the author.')
+    parser.add_argument('--output-dir', default='./multi_frame_results/outputs', type=str, help='The output directory for saveing checkpoint and stats')
 
     args = parser.parse_args()
     return args
@@ -244,6 +308,9 @@ if __name__ == '__main__':
 
     config = params()
     config.distributed = False
+    output_dir = config.output_dir
+    print(f"output_dir = {output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
 
     losses = []
     val_losses = []
@@ -305,7 +372,12 @@ if __name__ == '__main__':
     test_dataloader = DataLoader(test_dset, shuffle=True, batch_size=config.batch_size,
                                  num_workers=config.num_workers, collate_fn=train_dset.collate_fn)
 
+
     if not config.hf_train:
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
+        scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1, verbose=False)
+        epochs = 0
 
         # Load checkpoint if neccesary:
         if config.load_checkpoint:
@@ -313,41 +385,56 @@ if __name__ == '__main__':
             print('Loading model from ' + config.checkpoint_file)
 
             # Load the model and stats from the checkpoint
-            model.load_state_dict(torch.load(os.path.join('multi_frame_results', config.checkpoint_file,
-                                                          'latest_model.pth')))
-            best_model = DriveVLMT5(config)
-            best_model.load_state_dict(torch.load(os.path.join('multi_frame_results', config.checkpoint_file,
-                                                               'latest_model.pth')))
+            if config.load_orig_format:
+                best_model, _, _, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart)
+            else:
+                best_model, optimizer, scheduler, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart)
 
-            with open(os.path.join('multi_frame_results', config.checkpoint_file, 'stats.json'), 'r') as f:
-                stats = json.load(f)
+            #model.load_state_dict(torch.load(os.path.join('multi_frame_results', config.checkpoint_file,
+                                                          #'latest_model.pth')))
+            #best_model = DriveVLMT5(config)
+            #best_model.load_state_dict(torch.load(os.path.join('multi_frame_results', config.checkpoint_file,
+                                                               #'latest_model.pth')))
 
-            min_train_loss, min_val_loss, losses, val_losses, epochs_ran = stats['min train loss'], stats[
-                'min val loss'], stats['losses'], stats['val losses'], stats['epochs']
+            if config.load_stat:
+                with open(os.path.join(f'{config.stat_file}', 'r')) as f:
+                    stats = json.load(f)
 
-            print(f'Minimum Training Loss: {min_train_loss}')
-            print(f'Training Losses: {losses}')
-            print(f'Minimum Validation Loss: {min_val_loss}')
-            print(f'Validation Losses: {val_losses}')
-            print(f'Epochs ran: {epochs_ran}')
-            timestr = config.checkpoint_file
+                min_train_loss, min_val_loss, losses, val_losses, epochs_ran = stats['min train loss'], stats[
+                    'min val loss'], stats['losses'], stats['val losses'], stats['epochs']
+
+                print(f'Minimum Training Loss: {min_train_loss}')
+                print(f'Training Losses: {losses}')
+                print(f'Minimum Validation Loss: {min_val_loss}')
+                print(f'Validation Losses: {val_losses}')
+                print(f'Epochs ran: {epochs_ran}')
         else:
-            checkpoint_path = os.path.join('multi_frame_results', timestr)
-            print(f'All model checkpoints and training stats will be saved in {checkpoint_path}')
-            os.mkdir(os.path.join('multi_frame_results', timestr))
+            pass
+            #checkpoint_path = os.path.join(f'{config.output_dir}', timestr)
+            #print(f'All model checkpoints and training stats will be saved in {checkpoint_path}')
+            #os.mkdir(os.path.join('multi_frame_results', timestr))
 
         # If loading a checkpoint, use the learning rate from the last epoch
-        if config.load_checkpoint:
+        if config.load_checkpoint and config.load_stat:
             lr = stats['learning rate']
-        else:
-            lr = config.learning_rate
 
-        min_train_loss, min_val_loss = custom_train(min_train_loss, min_val_loss, best_model, epochs_ran, lr)
+            # Set the learning rate to optimizer and scheduler
+            for i, param_group in enumerate(optimizer.param_groups):
+                param_group['lr'] = lr
+                scheduler.base_lrs[i] = lr  # optional but clean            
+
+        #min_train_loss, min_val_loss = custom_train(min_train_loss, min_val_loss, best_model, epochs_ran, lr)
+        if config.load_stat:
+            min_train_loss, min_val_loss, path = custom_train(min_train_loss, min_val_loss, best_model, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir, processor)
+        else:
+            min_train_loss, min_val_loss, path = custom_train(None, None, best_model, epochs, model, optimizer, scheduler, train_dataloader, val_dataloader, config, output_dir, processor)
+
         best_model = DriveVLMT5(config)
-        best_model.load_state_dict(torch.load(os.path.join('multi_frame_results', timestr, 'latest_model.pth')))
+        #best_model.load_state_dict(torch.load(path))
+        best_model, _, _, _ = load_checkpoint(model=best_model, checkpoint_path=path, optimizer=None, scheduler=None, load_orig_format=False, restart=False)
         best_model.to(device)
         test_loss = val_model(test_dataloader, best_model)
         statistics = [min_train_loss, min_val_loss, test_loss]
-        save_experiment(statistics)
+        save_experiment(statistics, config)
     else:
         train()

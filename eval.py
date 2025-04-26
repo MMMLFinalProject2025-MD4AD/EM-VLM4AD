@@ -42,6 +42,7 @@ def val_model(dloader, config):
 
             encodings = encodings.to(device)
             imgs = imgs.to(device)
+            labels = labels.to(device)
             outputs = model.generate(encodings, imgs)
 
             # Get the text output
