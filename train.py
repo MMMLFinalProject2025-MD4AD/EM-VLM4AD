@@ -16,10 +16,15 @@ from tqdm import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def load_checkpoint(model, checkpoint_path, optimizer=None, scheduler=None, load_orig_format=True, restart=False):
+def load_checkpoint(model, checkpoint_path, optimizer=None, scheduler=None, load_orig_format=True, restart=False, config=None):
 
     if load_orig_format:
-        model.load_state_dict(torch.load(checkpoint_path))
+        if config.feat == 'bevfusion':
+            full_state = torch.load(checkpoint_path, map_location=device)
+            filtered_state = {k: v for k, v in full_state.items() if not k.startswith("mvp.")}
+            model.load_state_dict(filtered_state, strict=False)
+        else:
+            model.load_state_dict(torch.load(checkpoint_path))
         return model, None, None, 0
     else:
         checkpoint = torch.load(checkpoint_path, map_location=device)
@@ -386,9 +391,9 @@ if __name__ == '__main__':
 
             # Load the model and stats from the checkpoint
             if config.load_orig_format:
-                best_model, _, _, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart)
+                best_model, _, _, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart, config)
             else:
-                best_model, optimizer, scheduler, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart)
+                best_model, optimizer, scheduler, epochs = load_checkpoint(model, config.checkpoint_file, optimizer, scheduler, config.load_orig_format, config.restart, config)
 
             #model.load_state_dict(torch.load(os.path.join('multi_frame_results', config.checkpoint_file,
                                                           #'latest_model.pth')))
@@ -431,7 +436,7 @@ if __name__ == '__main__':
 
         best_model = DriveVLMT5(config)
         #best_model.load_state_dict(torch.load(path))
-        best_model, _, _, _ = load_checkpoint(model=best_model, checkpoint_path=path, optimizer=None, scheduler=None, load_orig_format=False, restart=False)
+        best_model, _, _, _ = load_checkpoint(model=best_model, checkpoint_path=path, optimizer=None, scheduler=None, load_orig_format=False, restart=False, config=config)
         best_model.to(device)
         test_loss = val_model(test_dataloader, best_model)
         statistics = [min_train_loss, min_val_loss, test_loss]
