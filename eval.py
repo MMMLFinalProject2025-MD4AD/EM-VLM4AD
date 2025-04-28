@@ -112,7 +112,7 @@ def params():
     parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
     parser.add_argument('--max-len', default=512, type=int, help='Max length for generating sequence')
     parser.add_argument('--num-workers', default=16, type=int, help='# of Workers used by Dataloader')
-    parser.add_argument('--model-name', default='T5-Medium', type=str, help='The checkpoint to load from '
+    parser.add_argument('--model-name', default='T5-Base', type=str, help='The checkpoint to load from '
                                                                                  'multi_frame_results directory')
     parser.add_argument('--mask-img', action='store_true', help='Mask out the img embedding.')
     parser.add_argument('--feat', default='bevfusion', choices=['bevfusion', 'image'], type=str, help='Feature used')
