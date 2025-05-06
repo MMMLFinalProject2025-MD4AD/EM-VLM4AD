@@ -129,6 +129,7 @@ def custom_train(train_loss, val_loss, best_model, epochs, model, optimizer, sch
 
     save_chkpt_filename = 'latest_model_saved'
     path = os.path.join(output_dir, f'{save_chkpt_filename}' + '.pth')
+    print(f"epochs = {epochs}")
     for epoch in range(epochs, config.epochs):
         print('-------------------- EPOCH ' + str(epoch) + '/ TOTAL ' + str(config.epochs) + ' ---------------------')
         model.train()
